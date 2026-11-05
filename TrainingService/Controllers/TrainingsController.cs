@@ -1,179 +1,187 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
+using TrainingService.Data;
 using TrainingService.Models;
 using TrainingService.Services;
+using System.Text.Json;
 
-namespace TrainingService.Controllers
+namespace TrainingService.Controllers;
+
+[ApiController]
+[Route("api/trainings")]
+public class TrainingsController : ControllerBase
 {
-    [ApiController]
-    [Route("api/trainings")]
-    public class TrainingsController : ControllerBase
+    private static readonly SemaphoreSlim TrainingLock = new(1, 1);
+
+    private readonly TrainingDbContext _db;
+    private readonly RabbitMqPublisher _publisher;
+
+    public TrainingsController(TrainingDbContext db)
     {
-        private static readonly ConcurrentDictionary<int, Training>
-            Trainings = new();
+        _db = db;
+    }
 
-        private static readonly SemaphoreSlim TrainingLock = new(1, 1);
+    // GET: api/trainings
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var trainings = await _db.Trainings
+            .AsNoTracking()
+            .Include(training => training.Exercises.OrderBy(exercise => exercise.Id))
+            .OrderBy(training => training.Id)
+            .ToListAsync();
 
-        private static int _nextId = 0;
-        private static int _nextExerciseId = 0;
+        return Ok(trainings);
+    }
 
-        private readonly RabbitMqPublisher _publisher;
+    // GET: api/trainings/1
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetById(int id)
+    {
+        var training = await _db.Trainings
+            .AsNoTracking()
+            .Include(item => item.Exercises.OrderBy(exercise => exercise.Id))
+            .SingleOrDefaultAsync(item => item.Id == id);
 
-        public TrainingsController(RabbitMqPublisher publisher)
+        if (training is null)
+            return NotFound("Тренування не знайдено");
+
+        return Ok(training);
+    }
+
+    // POST: api/trainings
+    [HttpPost]
+    public async Task<IActionResult> Start([FromBody] StartTrainingRequest request)
+    {
+        if (request.UserId <= 0)
+            return BadRequest("Некоректний UserId");
+
+        var training = new Training
         {
-            _publisher = publisher;
+            UserId = request.UserId,
+            StartTime = DateTime.UtcNow,
+            Status = "InProgress"
+        };
+
+        _db.Trainings.Add(training);
+        await _db.SaveChangesAsync();
+
+        return CreatedAtAction(
+            nameof(GetById),
+            new { id = training.Id },
+            training);
+    }
+
+    // POST: api/trainings/1/exercises
+    [HttpPost("{id:int}/exercises")]
+    public async Task<IActionResult> AddExercise(
+        int id,
+        [FromBody] Exercise exercise)
+    {
+        if (string.IsNullOrWhiteSpace(exercise.Name) ||
+            exercise.Repetitions < 0 ||
+            exercise.DurationMinutes < 0)
+        {
+            return BadRequest("Некоректні дані вправи");
         }
 
-        // GET: api/trainings
-        [HttpGet]
-        public IActionResult GetAll()
-        {
-            return Ok(Trainings.Values.OrderBy(t => t.Id));
-        }
+        await TrainingLock.WaitAsync();
 
-        // GET: api/trainings/1
-        [HttpGet("{id:int}")]
-        public IActionResult GetById(int id)
+        try
         {
-            if (!Trainings.TryGetValue(id, out var training))
+            var training = await _db.Trainings
+                .SingleOrDefaultAsync(item => item.Id == id);
+
+            if (training is null)
                 return NotFound("Тренування не знайдено");
 
-            return Ok(training);
-        }
+            if (training.Status != "InProgress")
+                return BadRequest("Тренування вже завершено");
 
-        // POST: api/trainings
-        [HttpPost]
-        public IActionResult Start([FromBody] StartTrainingRequest request)
-        {
-            if (request.UserId <= 0)
-                return BadRequest("Некоректний UserId");
-
-            var training = new Training
+            var newExercise = new Exercise
             {
-                Id = Interlocked.Increment(ref _nextId),
-                UserId = request.UserId,
-                StartTime = DateTime.UtcNow,
-                Status = "InProgress"
+                Name = exercise.Name,
+                Repetitions = exercise.Repetitions,
+                DurationMinutes = exercise.DurationMinutes
             };
 
-            Trainings[training.Id] = training;
+            training.Exercises.Add(newExercise);
+            await _db.SaveChangesAsync();
 
-            return CreatedAtAction(
-                nameof(GetById),
-                new { id = training.Id },
-                training);
+            return Ok(newExercise);
         }
-
-        // POST: api/trainings/1/exercises
-        [HttpPost("{id:int}/exercises")]
-        public async Task<IActionResult> AddExercise(
-            int id,
-            [FromBody] Exercise exercise)
+        finally
         {
-            if (string.IsNullOrWhiteSpace(exercise.Name) ||
-                exercise.Repetitions < 0 ||
-                exercise.DurationMinutes < 0)
-            {
-                return BadRequest("Некоректні дані вправи");
-            }
-
-            await TrainingLock.WaitAsync();
-
-            try
-            {
-                if (!Trainings.TryGetValue(id, out var training))
-                    return NotFound("Тренування не знайдено");
-
-                if (training.Status != "InProgress")
-                    return BadRequest("Тренування вже завершено");
-
-                var newExercise = new Exercise
-                {
-                    Id = Interlocked.Increment(
-                        ref _nextExerciseId),
-                    Name = exercise.Name,
-                    Repetitions = exercise.Repetitions,
-                    DurationMinutes = exercise.DurationMinutes
-                };
-
-                training.Exercises.Add(newExercise);
-
-                return Ok(newExercise);
-            }
-            finally
-            {
-                TrainingLock.Release();
-            }
-        }
-
-        // POST: api/trainings/1/complete
-        [HttpPost("{id:int}/complete")]
-        public async Task<IActionResult> Complete(int id)
-        {
-            await TrainingLock.WaitAsync();
-
-            try
-            {
-                if (!Trainings.TryGetValue(id, out var training))
-                    return NotFound("Тренування не знайдено");
-
-                if (training.Status != "InProgress")
-                    return BadRequest("Тренування вже завершено");
-
-                var completedAt = DateTime.UtcNow;
-
-                var trainingEvent = new TrainingCompletedEvent
-                {
-                    TrainingId = training.Id,
-                    UserId = training.UserId,
-                    CompletedAt = completedAt,
-                    DurationMinutes = Math.Round(
-                        (completedAt - training.StartTime)
-                        .TotalMinutes, 2),
-                    Exercises = training.Exercises
-                        .Select(e => new Exercise
-                        {
-                            Id = e.Id,
-                            Name = e.Name,
-                            Repetitions = e.Repetitions,
-                            DurationMinutes = e.DurationMinutes
-                        }).ToList()
-                };
-
-                try
-                {
-                    await _publisher.PublishTrainingCompletedAsync(
-                        trainingEvent);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(
-                        $"[RabbitMQ ERROR] {ex.Message}");
-
-                    return StatusCode(
-                        503,
-                        "Не вдалося надіслати подію до RabbitMQ");
-                }
-
-                training.EndTime = completedAt;
-                training.Status = "Completed";
-
-                return Ok(new
-                {
-                    Message = "Тренування завершено",
-                    Training = training,
-                    EventPublished = true
-                });
-            }
-            finally
-            {
-                TrainingLock.Release();
-            }
+            TrainingLock.Release();
         }
     }
 
-    public class StartTrainingRequest
+    // POST: api/trainings/1/complete
+    [HttpPost("{id:int}/complete")]
+    public async Task<IActionResult> Complete(int id)
     {
-        public int UserId { get; set; }
+        await TrainingLock.WaitAsync();
+
+        try
+        {
+            var training = await _db.Trainings
+                .Include(item => item.Exercises.OrderBy(exercise => exercise.Id))
+                .SingleOrDefaultAsync(item => item.Id == id);
+
+            if (training is null)
+                return NotFound("Тренування не знайдено");
+
+            if (training.Status != "InProgress")
+                return BadRequest("Тренування вже завершено");
+
+            var completedAt = DateTime.UtcNow;
+
+            var trainingEvent = new TrainingCompletedEvent
+            {
+                EventId = Guid.NewGuid(),
+                TrainingId = training.Id,
+                UserId = training.UserId,
+                CompletedAt = completedAt,
+                DurationMinutes = Math.Round(
+                    (completedAt - training.StartTime).TotalMinutes, 2),
+                Exercises = training.Exercises
+                    .Select(exercise => new Exercise
+                    {
+                        Id = exercise.Id,
+                        Name = exercise.Name,
+                        Repetitions = exercise.Repetitions,
+                        DurationMinutes = exercise.DurationMinutes
+                    })
+                    .ToList()
+            };
+
+            training.EndTime = completedAt;
+            training.Status = "Completed";
+
+            _db.OutboxMessages.Add(new OutboxMessage
+            {
+                EventId = trainingEvent.EventId,
+                Payload = JsonSerializer.Serialize(trainingEvent),
+                CreatedAt = completedAt
+            });
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                Message = "Тренування завершено. Подія очікує відправки.",
+                Training = training,
+                EventQueued = true
+            });
+        }
+        finally
+        {
+            TrainingLock.Release();
+        }
     }
+}
+
+public class StartTrainingRequest
+{
+    public int UserId { get; set; }
 }

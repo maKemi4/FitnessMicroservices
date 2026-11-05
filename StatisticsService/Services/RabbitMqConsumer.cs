@@ -128,6 +128,13 @@ namespace StatisticsService.Services
                         return;
                     }
 
+                    if (bool.TryParse(
+                        Environment.GetEnvironmentVariable("SAGA_DEMO_FAIL"),
+                        out var simulateFailure) && simulateFailure)
+                    {
+                        throw new StatisticsWriteDemoException();
+                    }
+
                     bool added = _store.AddTraining(trainingEvent);
 
                     if (added)
@@ -148,6 +155,14 @@ namespace StatisticsService.Services
                     await channel.BasicAckAsync(
                         args.DeliveryTag,
                         multiple: false);
+                }
+                catch (StatisticsWriteDemoException ex)
+                {
+                    _logger.LogWarning(ex, "Saga demo: відхиляємо подію завершення тренування.");
+
+                    await channel.BasicRejectAsync(
+                        args.DeliveryTag,
+                        requeue: false);
                 }
                 catch (JsonException ex)
                 {
@@ -184,6 +199,13 @@ namespace StatisticsService.Services
             await Task.Delay(
                 Timeout.InfiniteTimeSpan,
                 stoppingToken);
+        }
+    }
+    public sealed class StatisticsWriteDemoException : Exception
+    {
+        public StatisticsWriteDemoException()
+            : base("Імітація помилки запису статистики.")
+        {
         }
     }
 }

@@ -35,8 +35,13 @@ namespace TrainingService.Services
             await using var connection =
                 await factory.CreateConnectionAsync();
 
+            var channelOptions = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true,
+                outstandingPublisherConfirmationsRateLimiter: null);
+
             await using var channel =
-                await connection.CreateChannelAsync();
+                await connection.CreateChannelAsync(channelOptions);
 
             await channel.QueueDeclareAsync(
                 queue: "training_completed",
@@ -60,7 +65,7 @@ namespace TrainingService.Services
             await channel.BasicPublishAsync(
                 exchange: string.Empty,
                 routingKey: "training_completed",
-                mandatory: false,
+                mandatory: true,
                 basicProperties: properties,
                 body: body
             );

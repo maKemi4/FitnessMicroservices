@@ -1,0 +1,4 @@
+CREATE SCHEMA profiles;
+CREATE SCHEMA load;
+CREATE SCHEMA training;
+CREATE SCHEMA statistics;

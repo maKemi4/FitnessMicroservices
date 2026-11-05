@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
     environment:
       ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__ProfilesDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
     networks:
       - fitness-network
     restart: unless-stopped
@@ -17,6 +18,7 @@ services:
     environment:
       ASPNETCORE_HTTP_PORTS: "8080"
       Services__UserProfileService: "http://user-profile-service:8080"
+      ConnectionStrings__LoadDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
     depends_on:
       - user-profile-service
     networks:
@@ -32,6 +34,7 @@ services:
     environment:
       ASPNETCORE_HTTP_PORTS: "8080"
       Services__UserProfileService: "http://user-profile-service:8080"
+      ConnectionStrings__LoadDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
     depends_on:
       - user-profile-service
     networks:
@@ -47,6 +50,7 @@ services:
     environment:
       ASPNETCORE_HTTP_PORTS: "8080"
       Services__UserProfileService: "http://user-profile-service:8080"
+      ConnectionStrings__LoadDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
     depends_on:
       - user-profile-service
     networks:
@@ -65,8 +69,11 @@ services:
       RabbitMQ__Port: "5672"
       RabbitMQ__UserName: "guest"
       RabbitMQ__Password: "guest"
+      ConnectionStrings__TrainingDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - fitness-network
@@ -82,12 +89,17 @@ services:
       RabbitMQ__Port: "5672"
       RabbitMQ__UserName: "guest"
       RabbitMQ__Password: "guest"
+      ConnectionStrings__StatisticsDb: "Host=postgres;Port=5432;Database=fitness;Username=fitness_admin;Password=${POSTGRES_PASSWORD:-fitness_local_dev}"
+      SAGA_DEMO_FAIL: "false"
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - fitness-network
     restart: unless-stopped
+
   api-gateway:
     build:
       context: ./ApiGateway
@@ -106,6 +118,25 @@ services:
     networks:
       - fitness-network
     restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: fitness
+      POSTGRES_USER: fitness_admin
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fitness_local_dev}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/01-create-schemas.sql:/docker-entrypoint-initdb.d/01-create-schemas.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U fitness_admin -d fitness"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - fitness-network
+    restart: unless-stopped
+
   rabbitmq:
     image: rabbitmq:4-management
     ports:
@@ -128,3 +159,4 @@ networks:
 
 volumes:
   rabbitmq_data:
+  postgres_data:

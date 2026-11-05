@@ -1,46 +1,66 @@
-﻿using StatisticsService.Models;
+﻿using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using StatisticsService.Data;
+using StatisticsService.Models;
 
-namespace StatisticsService.Services
+namespace StatisticsService.Services;
+
+public class StatisticsStore
 {
-    public class StatisticsStore
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public StatisticsStore(IServiceScopeFactory scopeFactory)
     {
-        private readonly object _lock = new();
+        _scopeFactory = scopeFactory;
+    }
 
-        private readonly List<TrainingCompletedEvent>
-            _completedTrainings = new();
+    public bool AddTraining(TrainingCompletedEvent training)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<StatisticsDbContext>();
 
-        private readonly HashSet<Guid> _processedEvents = new();
+        var payload = JsonSerializer.Serialize(training);
 
-        public bool AddTraining(TrainingCompletedEvent training)
-        {
-            lock (_lock)
-            {
-                if (_processedEvents.Contains(training.EventId))
-                    return false;
+        var insertedRows = db.Database.ExecuteSqlInterpolated($"""
+            INSERT INTO statistics.completed_trainings ("EventId", "UserId", "Payload")
+            VALUES ({training.EventId}, {training.UserId}, CAST({payload} AS jsonb))
+            ON CONFLICT ("EventId") DO NOTHING;
+            """);
 
-                _completedTrainings.Add(training);
-                _processedEvents.Add(training.EventId);
+        return insertedRows == 1;
+    }
 
-                return true;
-            }
-        }
+    public List<TrainingCompletedEvent> GetAll()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<StatisticsDbContext>();
 
-        public List<TrainingCompletedEvent> GetAll()
-        {
-            lock (_lock)
-            {
-                return _completedTrainings.ToList();
-            }
-        }
+        var payloads = db.CompletedTrainings
+            .AsNoTracking()
+            .Select(record => record.Payload)
+            .ToList();
 
-        public List<TrainingCompletedEvent> GetByUser(int userId)
-        {
-            lock (_lock)
-            {
-                return _completedTrainings
-                    .Where(t => t.UserId == userId)
-                    .ToList();
-            }
-        }
+        return payloads.Select(DeserializeEvent).ToList();
+    }
+
+    public List<TrainingCompletedEvent> GetByUser(int userId)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<StatisticsDbContext>();
+
+        var payloads = db.CompletedTrainings
+            .AsNoTracking()
+            .Where(record => record.UserId == userId)
+            .Select(record => record.Payload)
+            .ToList();
+
+        return payloads.Select(DeserializeEvent).ToList();
+    }
+
+    private static TrainingCompletedEvent DeserializeEvent(string payload)
+    {
+        return JsonSerializer.Deserialize<TrainingCompletedEvent>(payload)
+            ?? throw new InvalidOperationException(
+                "Не вдалося прочитати збережену подію тренування.");
     }
 }

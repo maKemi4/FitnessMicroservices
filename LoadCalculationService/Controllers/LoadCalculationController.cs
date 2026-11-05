@@ -2,6 +2,7 @@
 using LoadCalculationService.Models;
 using System.Net;
 using System.Net.Http.Json;
+using LoadCalculationService.Data;
 
 namespace LoadCalculationService.Controllers
 {
@@ -10,12 +11,14 @@ namespace LoadCalculationService.Controllers
     public class LoadCalculationController : ControllerBase
     {
         private readonly HttpClient _httpClient;
+        private readonly LoadDbContext _db;
 
         public LoadCalculationController(
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            LoadDbContext db)
         {
-            _httpClient = httpClientFactory.CreateClient(
-                "UserProfileService");
+            _httpClient = httpClientFactory.CreateClient("UserProfileService");
+            _db = db;
         }
 
         // GET: api/load/1
@@ -103,6 +106,9 @@ namespace LoadCalculationService.Controllers
                 Recommendation = recommendation,
                 CreatedAt = DateTime.UtcNow
             };
+
+            _db.TrainingPlans.Add(plan);
+            await _db.SaveChangesAsync();
 
             Response.Headers["X-Service-Instance"] = Environment.MachineName;
 

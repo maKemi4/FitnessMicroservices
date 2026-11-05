@@ -1,112 +1,97 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using UserProfileService.Data;
 using UserProfileService.Models;
-using System.Collections.Concurrent;
 
-namespace UserProfileService.Controllers
+namespace UserProfileService.Controllers;
+
+[ApiController]
+[Route("api/users")]
+public class UsersController(ProfilesDbContext db) : ControllerBase
 {
-    [ApiController]
-    [Route("api/users")]
-    public class UsersController : ControllerBase
+    // GET: api/users
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
     {
-        private static readonly ConcurrentDictionary<int, UserProfile>
-            Users = new();
+        var users = await db.Users.AsNoTracking()
+            .OrderBy(user => user.Id)
+            .ToListAsync();
 
-        private static int _nextId = 0;
+        return Ok(users);
+    }
 
-        // GET: api/users
-        [HttpGet]
-        public IActionResult GetAll()
+    // GET: api/users/1
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetById(int id)
+    {
+        var user = await db.Users.FindAsync(id);
+        if (user is null)
+            return NotFound("Користувача не знайдено");
+
+        return Ok(user);
+    }
+
+    // POST: api/users
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] UserProfile user)
+    {
+        if (!IsValid(user))
+            return BadRequest("Некоректні дані користувача");
+
+        var newUser = new UserProfile
         {
-            return Ok(Users.Values.OrderBy(u => u.Id));
-        }
+            Name = user.Name,
+            Height = user.Height,
+            Weight = user.Weight
+        };
 
-        // GET: api/users/1
-        [HttpGet("{id:int}")]
-        public IActionResult GetById(int id)
-        {
-            if (!Users.TryGetValue(id, out var user))
-                return NotFound("Користувача не знайдено");
+        db.Users.Add(newUser);
+        await db.SaveChangesAsync();
 
-            return Ok(user);
-        }
+        return CreatedAtAction(nameof(GetById), new { id = newUser.Id }, newUser);
+    }
 
-        // POST: api/users
-        [HttpPost]
-        public IActionResult Create([FromBody] UserProfile user)
-        {
-            if (string.IsNullOrWhiteSpace(user.Name) ||
-                !IsValidParameters(user.Height, user.Weight))
-            {
-                return BadRequest("Некоректні дані користувача");
-            }
+    // PUT: api/users/1
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, [FromBody] UserProfile updatedUser)
+    {
+        if (!IsValid(updatedUser))
+            return BadRequest("Некоректні дані користувача");
 
-            var id = Interlocked.Increment(ref _nextId);
+        var changedRows = await db.Users
+            .Where(user => user.Id == id)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(user => user.Name, updatedUser.Name)
+                .SetProperty(user => user.Height, updatedUser.Height)
+                .SetProperty(user => user.Weight, updatedUser.Weight));
 
-            var newUser = new UserProfile
-            {
-                Id = id,
-                Name = user.Name,
-                Height = user.Height,
-                Weight = user.Weight
-            };
+        if (changedRows == 0)
+            return NotFound("Користувача не знайдено");
 
-            Users[id] = newUser;
+        updatedUser.Id = id;
+        return Ok(updatedUser);
+    }
 
-            return CreatedAtAction(
-                nameof(GetById),
-                new { id },
-                newUser
-            );
-        }
+    // DELETE: api/users/1
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var deletedRows = await db.Users
+            .Where(user => user.Id == id)
+            .ExecuteDeleteAsync();
 
-        // PUT: api/users/1
-        [HttpPut("{id:int}")]
-        public IActionResult Update(
-            int id,
-            [FromBody] UserProfile updatedUser)
-        {
-            if (string.IsNullOrWhiteSpace(updatedUser.Name) ||
-                !IsValidParameters(
-                    updatedUser.Height,
-                    updatedUser.Weight))
-            {
-                return BadRequest("Некоректні дані користувача");
-            }
+        if (deletedRows == 0)
+            return NotFound("Користувача не знайдено");
 
-            if (!Users.ContainsKey(id))
-                return NotFound("Користувача не знайдено");
+        return NoContent();
+    }
 
-            var user = new UserProfile
-            {
-                Id = id,
-                Name = updatedUser.Name,
-                Height = updatedUser.Height,
-                Weight = updatedUser.Weight
-            };
-
-            Users[id] = user;
-
-            return Ok(user);
-        }
-
-        // DELETE: api/users/1
-        [HttpDelete("{id:int}")]
-        public IActionResult Delete(int id)
-        {
-            if (!Users.TryRemove(id, out _))
-                return NotFound("Користувача не знайдено");
-
-            return NoContent();
-        }
-
-        private static bool IsValidParameters(
-            double height,
-            double weight)
-        {
-            return double.IsFinite(height) &&
-                   double.IsFinite(weight) &&
-                   height > 0 &&
-                   weight > 0;
-        }
+    private static bool IsValid(UserProfile user)
+    {
+        return !string.IsNullOrWhiteSpace(user.Name)
+            && double.IsFinite(user.Height)
+            && double.IsFinite(user.Weight)
+            && user.Height > 0
+            && user.Weight > 0;
     }
 }

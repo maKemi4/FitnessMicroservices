@@ -1,6 +1,14 @@
+using LoadCalculationService.Data;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
+builder.Services.AddDbContext<LoadDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("LoadDb")
+        ?? throw new InvalidOperationException("Не задано підключення LoadDb.")));
+
 
 // HTTP-клієнт для зв'язку з UserProfileService
 builder.Services.AddHttpClient(
