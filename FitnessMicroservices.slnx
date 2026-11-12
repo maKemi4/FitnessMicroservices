@@ -3,6 +3,10 @@
     <File Path="docker-compose.yml" />
   </Folder>
   <Project Path="ApiGateway/ApiGateway.csproj" />
+  <Project Path="FitnessAiClient/FitnessAiClient.csproj" />
+  <Project Path="FitnessConsumerAgent/FitnessConsumerAgent.csproj" />
+  <Project Path="FitnessMcpServer/FitnessMcpServer.csproj" />
+  <Project Path="FitnessProducerAgent/FitnessProducerAgent.csproj" />
   <Project Path="LoadCalculationService/LoadCalculationService.csproj" />
   <Project Path="StatisticsService/StatisticsService.csproj" />
   <Project Path="TrainingService/TrainingService.csproj" />
