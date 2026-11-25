@@ -1,0 +1,171 @@
+﻿<!doctype html>
+<html lang="uk">
+<head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="no-referrer">
+    <title>Вхід у FitnessMicroservices</title>
+</head>
+<body>
+    <h1>Вхід у FitnessMicroservices</h1>
+
+    <button id="login-button" type="button">Увійти через Keycloak</button>
+    <p id="login-status" role="status"></p>
+
+    <button id="load-users" type="button">Отримати користувачів</button>
+    <button id="load-statistics" type="button">Отримати статистику</button>
+
+    <pre id="api-result" aria-live="polite"></pre>
+
+    <script>
+            const keycloakUrl = "http://localhost:8081/realms/fitness";
+            const clientId = "fitness-browser";
+            const redirectUri = `${window.location.origin}/keycloak-login.html`;
+            const loginStorageKey = "fitness-keycloak-login";
+
+            const buttonElement = document.getElementById("login-button");
+            const statusElement = document.getElementById("login-status");
+
+            if (!(buttonElement instanceof HTMLButtonElement) || !statusElement) {
+              throw new Error("Не знайдено елементи сторінки входу.");
+            }
+
+            const loginButton = buttonElement;
+            const loginStatus = statusElement;
+
+            /** @type {string | undefined} */
+            let accessToken;
+
+            /** @param {Uint8Array} bytes */
+            function toBase64Url(bytes) {
+              return btoa(String.fromCharCode(...bytes))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replace(/=+$/, "");
+            }
+
+            async function startLogin() {
+              loginButton.disabled = true;
+
+              const codeVerifier = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+              const state = crypto.randomUUID();
+              const digest = await crypto.subtle.digest(
+                "SHA-256",
+                new TextEncoder().encode(codeVerifier)
+              );
+
+              sessionStorage.setItem(loginStorageKey, JSON.stringify({ codeVerifier, state }));
+
+              const authorizationUrl = new URL(`${keycloakUrl}/protocol/openid-connect/auth`);
+              authorizationUrl.search = new URLSearchParams({
+                client_id: clientId,
+                redirect_uri: redirectUri,
+                response_type: "code",
+                scope: "openid fitness.users fitness.statistics",
+                state,
+                code_challenge: toBase64Url(new Uint8Array(digest)),
+                code_challenge_method: "S256"
+              }).toString();
+
+              window.location.assign(authorizationUrl);
+            }
+
+            async function finishLogin() {
+              const params = new URLSearchParams(window.location.search);
+              const code = params.get("code");
+              const loginError = params.get("error");
+
+              if (code === null && loginError === null) return;
+              loginButton.disabled = true;
+
+              const savedValue = sessionStorage.getItem(loginStorageKey);
+              sessionStorage.removeItem(loginStorageKey);
+              history.replaceState(null, "", redirectUri);
+
+              const savedLogin = savedValue === null ? null : JSON.parse(savedValue);
+              if (typeof savedLogin?.state !== "string" ||
+                  typeof savedLogin.codeVerifier !== "string" ||
+                  params.get("state") !== savedLogin.state) {
+                throw new Error("Не вдалося підтвердити запит на вхід.");
+              }
+
+              if (loginError !== null) {
+                throw new Error(`Помилка входу в Keycloak (${loginError}).`);
+              }
+
+              if (!code) {
+                throw new Error("Keycloak не повернув код авторизації.");
+              }
+
+              const response = await fetch(`${keycloakUrl}/protocol/openid-connect/token`, {
+                method: "POST",
+                body: new URLSearchParams({
+                  grant_type: "authorization_code",
+                  client_id: clientId,
+                  redirect_uri: redirectUri,
+                  code,
+                  code_verifier: savedLogin.codeVerifier
+                })
+              });
+
+              if (!response.ok) {
+                throw new Error(`Обмін коду не вдався. HTTP ${response.status}.`);
+              }
+
+              const tokens = await response.json();
+
+              if (typeof tokens.access_token !== "string" || !tokens.access_token) {
+                throw new Error("Keycloak не повернув токен доступу.");
+              }
+
+              accessToken = tokens.access_token;
+              loginStatus.textContent = "Вхід успішний. Токен доступу отримано.";
+              loginButton.disabled = false;
+            }
+
+            /** @param {unknown} error */
+            function showError(error) {
+              loginStatus.textContent = error instanceof Error ? error.message : String(error);
+              loginButton.disabled = false;
+            }
+
+            /**
+             * @param {string} buttonId
+             * @param {string} path
+             */
+            function bindApiButton(buttonId, path) {
+              document.getElementById(buttonId)?.addEventListener("click", async () => {
+                const result = document.getElementById("api-result");
+                if (!result) return;
+
+                if (!accessToken) {
+                  result.textContent = "Спочатку увійди через Keycloak.";
+                  return;
+                }
+
+                try {
+                  const response = await fetch(path, {
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                  });
+
+                  const statusLine = `GET ${path} → HTTP ${response.status}`;
+                  if (!response.ok) {
+                    result.textContent = statusLine;
+                    return;
+                  }
+
+                  const data = await response.json();
+                  result.textContent = `${statusLine}\n${JSON.stringify(data, null, 2)}`;
+                } catch {
+                  result.textContent = "Не вдалося звернутися до Gateway.";
+                }
+              });
+            }
+
+            loginButton.addEventListener("click", () => startLogin().catch(showError));
+            finishLogin().catch(showError);
+
+            bindApiButton("load-users", "/api/users");
+            bindApiButton("load-statistics", "/api/statistics");
+    </script>
+</body>
+</html>
