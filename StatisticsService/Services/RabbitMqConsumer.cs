@@ -3,6 +3,8 @@ using RabbitMQ.Client.Events;
 using StatisticsService.Models;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
+using Prometheus;
 
 namespace StatisticsService.Services
 {
@@ -11,6 +13,12 @@ namespace StatisticsService.Services
         private readonly IConfiguration _configuration;
         private readonly StatisticsStore _store;
         private readonly ILogger<RabbitMqConsumer> _logger;
+
+        private static readonly ActivitySource TraceSource = new("FitnessMicroservices");
+
+        private static readonly Gauge EventPropagationLag = Metrics.CreateGauge(
+            "event_propagation_lag_seconds",
+            "Time from training completion to statistics update in seconds");
 
         public RabbitMqConsumer(
             IConfiguration configuration,
@@ -100,6 +108,34 @@ namespace StatisticsService.Services
 
             consumer.ReceivedAsync += async (sender, args) =>
             {
+                string? traceParent = null;
+
+                if (args.BasicProperties.Headers?.TryGetValue(
+                    "traceparent", out var headerValue) == true)
+                {
+                    traceParent = headerValue switch
+                    {
+                        byte[] bytes => Encoding.UTF8.GetString(bytes),
+                        string value => value,
+                        _ => null
+                    };
+                }
+
+                ActivityContext.TryParse(
+                    traceParent,
+                    null,
+                    true,
+                    out var parentContext);
+
+                using var activity = TraceSource.StartActivity(
+                    "training_completed consume",
+                    ActivityKind.Consumer,
+                    parentContext);
+
+                activity?.SetTag("messaging.system", "rabbitmq");
+                activity?.SetTag("messaging.destination.name", "training_completed");
+                activity?.SetTag("messaging.message.id", args.BasicProperties.MessageId);
+
                 try
                 {
                     var json = Encoding.UTF8.GetString(
@@ -139,6 +175,9 @@ namespace StatisticsService.Services
 
                     if (added)
                     {
+                        double lagSeconds = (DateTime.UtcNow - trainingEvent.CompletedAt).TotalSeconds;
+                        EventPropagationLag.Set(Math.Max(0, lagSeconds));
+
                         _logger.LogInformation(
                             "TrainingCompleted отримано. " +
                             "TrainingId={TrainingId}, UserId={UserId}",

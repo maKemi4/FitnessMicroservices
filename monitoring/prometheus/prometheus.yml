@@ -1,0 +1,40 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+      - /etc/prometheus/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+scrape_configs:
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets:
+          - 'api-gateway:8080'
+
+  - job_name: 'user-profile-service'
+    static_configs:
+      - targets:
+          - 'user-profile-service:8080'
+
+  - job_name: 'load-calculation-service'
+    static_configs:
+      - targets:
+          - 'load-calculation-service:8080'
+          - 'load-calculation-service-2:8080'
+          - 'load-calculation-service-3:8080'
+
+  - job_name: 'training-service'
+    static_configs:
+      - targets:
+          - 'training-service:8080'
+
+  - job_name: 'statistics-service'
+    static_configs:
+      - targets:
+          - 'statistics-service:8080'

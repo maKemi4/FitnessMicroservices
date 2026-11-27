@@ -2,6 +2,7 @@
 using System.Text.Json;
 using RabbitMQ.Client;
 using TrainingService.Models;
+using System.Diagnostics;
 
 namespace TrainingService.Services
 {
@@ -14,9 +15,27 @@ namespace TrainingService.Services
             _configuration = configuration;
         }
 
+        private static readonly ActivitySource TraceSource = new("FitnessMicroservices");
+
         public async Task PublishTrainingCompletedAsync(
             TrainingCompletedEvent trainingEvent)
         {
+            ActivityContext.TryParse(
+                trainingEvent.TraceParent,
+                null,
+                false,
+                out var parentContext);
+
+            using var activity = TraceSource.StartActivity(
+                "training_completed publish",
+                ActivityKind.Producer,
+                parentContext);
+
+            activity?.SetTag("messaging.system", "rabbitmq");
+            activity?.SetTag("messaging.destination.name", "training_completed");
+            activity?.SetTag("messaging.message.id", trainingEvent.EventId.ToString());
+            activity?.SetTag("training.id", trainingEvent.TrainingId);
+
             var factory = new ConnectionFactory
             {
                 HostName = _configuration[
@@ -61,6 +80,16 @@ namespace TrainingService.Services
                 ContentType = "application/json",
                 MessageId = trainingEvent.EventId.ToString()
             };
+
+            var traceParent = activity?.Id ?? trainingEvent.TraceParent;
+
+            if (traceParent is not null)
+            {
+                properties.Headers = new Dictionary<string, object?>
+                {
+                    ["traceparent"] = traceParent
+                };
+            }
 
             await channel.BasicPublishAsync(
                 exchange: string.Empty,

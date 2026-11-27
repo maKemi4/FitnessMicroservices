@@ -12,5 +12,6 @@
         public double DurationMinutes { get; set; }
 
         public List<Exercise> Exercises { get; set; } = new();
+        public string? TraceParent { get; set; }
     }
 }

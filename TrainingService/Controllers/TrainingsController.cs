@@ -4,6 +4,7 @@ using TrainingService.Data;
 using TrainingService.Models;
 using TrainingService.Services;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace TrainingService.Controllers;
 
@@ -139,6 +140,7 @@ public class TrainingsController : ControllerBase
             var trainingEvent = new TrainingCompletedEvent
             {
                 EventId = Guid.NewGuid(),
+                TraceParent = Activity.Current?.Id,
                 TrainingId = training.Id,
                 UserId = training.UserId,
                 CompletedAt = completedAt,

@@ -1,0 +1,43 @@
+discovery.docker "fitness" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "fitness_logs" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex = "fitnessmicroservices"
+    action = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex = "(api-gateway|user-profile-service|load-calculation-service(-2|-3)?|training-service|statistics-service)"
+    action = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex = "/(.*)"
+    target_label = "container"
+  }
+}
+
+loki.source.docker "fitness" {
+  host = "unix:///var/run/docker.sock"
+  targets = discovery.docker.fitness.targets
+  relabel_rules = discovery.relabel.fitness_logs.rules
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

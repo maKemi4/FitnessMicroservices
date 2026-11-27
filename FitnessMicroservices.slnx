@@ -1,6 +1,11 @@
 <Solution>
   <Folder Name="/Solution Items/">
     <File Path="docker-compose.yml" />
+    <File Path="monitoring/alertmanager/alertmanager.yml" />
+    <File Path="monitoring/alloy/config.alloy" />
+    <File Path="monitoring/grafana/provisioning/datasources/datasources.yml" />
+    <File Path="monitoring/prometheus/alert_rules.yml" />
+    <File Path="monitoring/prometheus/prometheus.yml" />
   </Folder>
   <Project Path="ApiGateway/ApiGateway.csproj" />
   <Project Path="FitnessAiClient/FitnessAiClient.csproj" />
